@@ -3,7 +3,6 @@
 
     const WHITE = chroma('#FFF');
     const BLACK = chroma('#000');
-    const SATURATION = 0.5;
 
     const STYLE = `
         .tab.active {
@@ -17,6 +16,13 @@
             filter: drop-shadow(1px 0 0 rgba(246, 246, 246, 0.75)) drop-shadow(-1px 0 0 rgba(246, 246, 246, 0.75)) drop-shadow(0 1px 0 rgba(246, 246, 246, 0.75)) drop-shadow(0 -1px 0 rgba(246, 246, 246, 0.75));
         }
     `;
+
+    const INTERNAL_PAGES = [
+        'chrome://',
+        'vivaldi://',
+        'devtools://',
+        'chrome-extension://'
+    ]
 
     class ColorTabs {
         #observer = null;
@@ -35,47 +41,49 @@
 
         #addListeners() {
             const tabStrip = document.querySelector('div.tab-strip');
-            this.#observer = new MutationObserver(() => {
-                this.#colorTabs();
-                setTimeout(() => {
-                    this.#colorTabs();
-                }, 100);
-            });
+            this.#observer = new MutationObserver(() => this.#colorTabsDelayed());
             this.#observer.observe(tabStrip, {childList: true, subtree: true});
 
-            vivaldi.tabsPrivate.onThemeColorChanged.addListener(() => {
-                this.#colorTabs();
-                setTimeout(() => {
-                    this.#colorTabs();
-                }, 100);
-            });
+            vivaldi.tabsPrivate.onThemeColorChanged.addListener(() => this.#colorTabsDelayed());
+
+            vivaldi.prefs.onChanged.addListener(() => this.#colorTabsDelayed())
         }
 
-        #colorTabs() {
+        #colorTabsDelayed() {
+            this.#colorTabs();
+            setTimeout(() => this.#colorTabs(), 100);
+        }
+
+        async #colorTabs() {
+            const theme = await this.#getCurrentTheme();
             const tabs = document.querySelectorAll('div.tab');
-            tabs.forEach((tab) => {
-                this.#setTabColor(tab);
-            });
+            tabs.forEach((tab) => this.#setTabColor(tab, theme));
         }
 
-        #setTabColor(tab) {
-            var bgColor = null;
-            var image = tab.querySelector('img');
-            if (image) {
-                const palette = this.#getPalette(image);
-                if (!palette || palette.length === 0) return;
-                bgColor = chroma(palette[0]);
-            } else {
-                bgColor = chroma(this.#browser.style.getPropertyValue('--colorBg'));
+        async #setTabColor(tab, theme) {
+            var colorAccentBg = chroma(theme.colorAccentBg);
+            const accentSaturationLimit = theme.accentSaturationLimit;
+
+            const tabId = this.#getTabId(tab);
+            const chromeTab = await this.#getChromeTab(tabId);
+
+            if (!this.#isInternalPage(chromeTab.url)) {
+                var image = tab.querySelector('img');
+                if (image) {
+                    const palette = this.#getPalette(image);
+                    if (!palette || palette.length === 0) return;
+                    colorAccentBg = chroma(palette[0]);
+                }
             }
-            bgColor = bgColor.set('hsl.s', SATURATION);
-            const isBright = bgColor.luminance() > 0.4;
+
+            colorAccentBg = colorAccentBg.set('hsl.s', colorAccentBg.get('hsl.s') * accentSaturationLimit);
+            const isBright = colorAccentBg.luminance() > 0.4;
             const fgColor = isBright ? BLACK : WHITE;
 
             if (tab.classList.contains('active')) {
-                this.#setAccentColors(bgColor, isBright);
+                this.#setAccentColors(colorAccentBg, isBright);
             } else {
-                tab.style.backgroundColor = bgColor.css();
+                tab.style.backgroundColor = colorAccentBg.css();
                 tab.style.color = fgColor.css();
             }
         }
@@ -142,8 +150,30 @@
 
         // utils
 
-        #getVivaldiTab(id) {
-            return document.querySelector(`div.tab#tab-${id}`);
+        #getTabId(tab) {
+            return tab.getAttribute('data-id').slice(4);
+        }
+
+        #isInternalPage(url) {
+            INTERNAL_PAGES.some((p) => url.startsWith(p))
+        }
+
+        async #getChromeTab(tabId) {
+            return tabId.length < 16 ? await chrome.tabs.get(Number(tabId)) : await this.#getFirstChromeTabInGroup(tabId);
+        }
+
+        async #getFirstChromeTabInGroup(groupId) {
+            const tabs = await chrome.tabs.query({currentWindow: true});
+            return tabs.find((tab) => {
+                const vivExtData = JSON.parse(tab.vivExtData);
+                return vivExtData.group === groupId;
+            });
+        }
+
+        async #getCurrentTheme() {
+            const themeId = await vivaldi.prefs.get('vivaldi.themes.current');
+            const themes = Array.prototype.concat(await vivaldi.prefs.get('vivaldi.themes.system'), await vivaldi.prefs.get('vivaldi.themes.user'));
+            return themes.find(theme => theme.id === themeId);
         }
 
         // getters
