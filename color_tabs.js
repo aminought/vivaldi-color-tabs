@@ -5,13 +5,6 @@
     const BLACK = chroma('#000');
 
     const STYLE = `
-        .tab.active {
-            border-top-style: solid;
-            border-top-width: 2px;
-            border-top-color: var(--colorAccentFg);
-            justify-content: flex-end;
-        }
-
         .tab .favicon:not(.svg) {
             filter: drop-shadow(1px 0 0 rgba(246, 246, 246, 0.75)) drop-shadow(-1px 0 0 rgba(246, 246, 246, 0.75)) drop-shadow(0 1px 0 rgba(246, 246, 246, 0.75)) drop-shadow(0 -1px 0 rgba(246, 246, 246, 0.75));
         }
@@ -22,7 +15,7 @@
         'vivaldi://',
         'devtools://',
         'chrome-extension://'
-    ]
+    ];
 
     class ColorTabs {
         #observer = null;
@@ -40,34 +33,55 @@
         }
 
         #addListeners() {
-            const tabStrip = document.querySelector('div.tab-strip');
-            this.#observer = new MutationObserver(() => this.#colorTabsDelayed());
-            this.#observer.observe(tabStrip, {childList: true, subtree: true});
+            chrome.tabs.onActivated.addListener(() => {
+                this.#colorTabsDelayed();
+            })
 
-            vivaldi.tabsPrivate.onThemeColorChanged.addListener(() => this.#colorTabsDelayed());
+            vivaldi.tabsPrivate.onThemeColorChanged.addListener(() => {
+                this.#colorTabsDelayed();
+            });
 
-            vivaldi.prefs.onChanged.addListener(() => this.#colorTabsDelayed())
+            vivaldi.prefs.onChanged.addListener((info) => {
+                if (info.path.startsWith('vivaldi.themes')) {
+                    this.#colorTabsDelayed();
+                }
+            })
         }
 
         #colorTabsDelayed() {
             this.#colorTabs();
-            setTimeout(() => this.#colorTabs(), 100);
+            setTimeout(() => this.#colorTabs(), 300);
         }
 
         async #colorTabs() {
-            const theme = await this.#getCurrentTheme();
             const tabs = document.querySelectorAll('div.tab');
-            tabs.forEach((tab) => this.#setTabColor(tab, theme));
+            const theme = await this.#getCurrentTheme();
+
+            const accentFromPage = theme.accentFromPage;
+            const transparencyTabs = theme.transparencyTabs;
+            const tabColorAllowed = accentFromPage && !transparencyTabs;
+
+            if (tabColorAllowed) {
+                const accentOnWindow = theme.accentOnWindow;
+                const colorAccentBg = chroma(theme.colorAccentBg);
+                const accentSaturationLimit = theme.accentSaturationLimit;
+                tabs.forEach((tab) => this.#setTabColor(tab, accentOnWindow, colorAccentBg, accentSaturationLimit));
+            } else {
+                tabs.forEach((tab) => this.#resetTabColor(tab));
+            }
         }
 
-        async #setTabColor(tab, theme) {
-            var colorAccentBg = chroma(theme.colorAccentBg);
-            const accentSaturationLimit = theme.accentSaturationLimit;
+        async #resetTabColor(tab) {
+            tab.style.backgroundColor = null;
+            tab.style.color = null;
+        }
 
+        async #setTabColor(tab, accentOnWindow, colorAccentBg, accentSaturationLimit) {
             const tabId = this.#getTabId(tab);
             const chromeTab = await this.#getChromeTab(tabId);
+            const isInternalPage = this.#isInternalPage(chromeTab.url);
 
-            if (!this.#isInternalPage(chromeTab.url)) {
+            if (!isInternalPage) {
                 var image = tab.querySelector('img');
                 if (image) {
                     const palette = this.#getPalette(image);
@@ -76,28 +90,45 @@
                 }
             }
 
-            colorAccentBg = colorAccentBg.set('hsl.s', colorAccentBg.get('hsl.s') * accentSaturationLimit);
+            const saturation = colorAccentBg.get('hsl.s');
+            colorAccentBg = colorAccentBg.set('hsl.s', saturation * accentSaturationLimit);
             const isBright = colorAccentBg.luminance() > 0.4;
-            const fgColor = isBright ? BLACK : WHITE;
+            const colorAccentFg = isBright ? BLACK : WHITE;
 
-            if (tab.classList.contains('active')) {
-                this.#setAccentColors(colorAccentBg, isBright);
-            } else {
-                tab.style.backgroundColor = colorAccentBg.css();
-                tab.style.color = fgColor.css();
+            if (isInternalPage) {
+                if (this.#isTabActive(tab)) {
+                    this.#setAccentColors(colorAccentBg, colorAccentFg, isBright);
+                    tab.style.backgroundColor = accentOnWindow ? 'var(--colorBg)' : 'var(--colorAccentBg)';
+                } else {
+                    tab.style.backgroundColor = 'var(--colorBgDark)';
+                }
+                tab.style.color = 'var(--colorFg)';
+                return;
             }
+
+            if (this.#isTabActive(tab)) {
+                this.#setAccentColors(colorAccentBg, colorAccentFg, isBright);
+                if (accentOnWindow) {
+                    tab.style.backgroundColor = tab.classList.contains('active') ? 'var(--colorBg)' : 'var(--colorBgDark)';
+                    tab.style.color = 'var(--colorFg)';
+                }
+                return;
+            }
+            
+            tab.style.backgroundColor = colorAccentBg.css();
+            tab.style.color = colorAccentFg.css();
         }
 
-        #setAccentColors(accentBg, isBright) {
-            this.#setColor('--colorAccentBg', accentBg);
-            this.#setColor('--colorAccentBgDark', accentBg.darken(.4));
-            this.#setColor('--colorAccentBgDarker', accentBg.darken(1));
-            this.#setColor('--colorAccentBgAlpha', accentBg.alpha(isBright ? .45 : .55));
-            this.#setColor('--colorAccentBgAlphaHeavy', accentBg.alpha(isBright ? .25 : .35));
+        #setAccentColors(colorAccentBg, colorAccentFg, isBright) {
+            this.#setColor('--colorAccentBg', colorAccentBg);
+            this.#setColor('--colorAccentBgDark', colorAccentBg.darken(.4));
+            this.#setColor('--colorAccentBgDarker', colorAccentBg.darken(1));
+            this.#setColor('--colorAccentBgAlpha', colorAccentBg.alpha(isBright ? .45 : .55));
+            this.#setColor('--colorAccentBgAlphaHeavy', colorAccentBg.alpha(isBright ? .25 : .35));
 
-            this.#setColor('--colorAccentFg', isBright ? BLACK : WHITE);
-            this.#setColor('--colorAccentFgAlpha', accentBg.alpha(.15));
-            this.#setColor('--colorAccentFgAlphaHeavy', accentBg.alpha(.05));
+            this.#setColor('--colorAccentFg', colorAccentFg);
+            this.#setColor('--colorAccentFgAlpha', colorAccentFg.alpha(.15));
+            this.#setColor('--colorAccentFgAlphaHeavy', colorAccentFg.alpha(.05));
         }
 
         #getPalette(image) {
@@ -155,7 +186,7 @@
         }
 
         #isInternalPage(url) {
-            INTERNAL_PAGES.some((p) => url.startsWith(p))
+            return INTERNAL_PAGES.some((p) => url.startsWith(p))
         }
 
         async #getChromeTab(tabId) {
@@ -168,6 +199,10 @@
                 const vivExtData = JSON.parse(tab.vivExtData);
                 return vivExtData.group === groupId;
             });
+        }
+
+        #isTabActive(tab) {
+            return tab.classList.contains('active');
         }
 
         async #getCurrentTheme() {
