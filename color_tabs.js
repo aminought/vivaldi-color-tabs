@@ -33,13 +33,9 @@
         }
 
         #addListeners() {
-            chrome.tabs.onActivated.addListener(() => {
-                this.#colorTabsDelayed();
-            })
-
-            vivaldi.tabsPrivate.onThemeColorChanged.addListener(() => {
-                this.#colorTabsDelayed();
-            });
+            chrome.tabs.onCreated.addListener(() => this.#colorTabsDelayed());
+            chrome.tabs.onActivated.addListener(() => this.#colorTabsDelayed());
+            vivaldi.tabsPrivate.onThemeColorChanged.addListener(() => this.#colorTabsDelayed());
 
             vivaldi.prefs.onChanged.addListener((info) => {
                 if (info.path.startsWith('vivaldi.themes')) {
