@@ -50,7 +50,7 @@
 
         #colorTabsDelayed() {
             this.#colorTabs();
-            setTimeout(() => this.#colorTabs(), 300);
+            setTimeout(() => this.#colorTabs(), 100);
         }
 
         async #colorTabs() {
@@ -85,8 +85,9 @@
                 var image = tab.querySelector('img');
                 if (image) {
                     const palette = this.#getPalette(image);
-                    if (!palette || palette.length === 0) return;
-                    colorAccentBg = chroma(palette[0]);
+                    if (palette && palette.length > 0) {
+                        colorAccentBg = chroma(palette[0]);
+                    }
                 }
             }
 
